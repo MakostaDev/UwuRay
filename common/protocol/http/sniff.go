@@ -39,79 +39,155 @@ func (h *SniffHeader) Domain() string {
 }
 
 var (
-	methods = [...]string{"get", "post", "head", "put", "delete", "options", "connect"}
+	spaceByte     = []byte(" ")
+	schemeSepByte = []byte("://")
+	crlfByte      = []byte("\r\n")
+	colonByte     = []byte(":")
+	hostKeyByte   = []byte("host")
+	httpVerPrefix = []byte("HTTP/1.")
 
-	errNotHTTPMethod = errors.New("not an HTTP method")
+	errNotHTTP     = errors.New("not an HTTP")
+	errNoHostFound = errors.New("no Host header found")
 )
 
-func beginWithHTTPMethod(b []byte) error {
-	for _, m := range &methods {
-		if len(b) >= len(m) && strings.EqualFold(string(b[:len(m)]), m) {
-			return nil
-		}
+var tcharTable = func() (t [256]bool) {
+	for c := 'a'; c <= 'z'; c++ {
+		t[c] = true
+	}
+	for c := 'A'; c <= 'Z'; c++ {
+		t[c] = true
+	}
+	for c := '0'; c <= '9'; c++ {
+		t[c] = true
+	}
+	for _, c := range []byte("!#$%&'*+-.^_`|~") {
+		t[c] = true
+	}
+	return
+}()
 
-		if len(b) < len(m) {
-			return common.ErrNoClue
+func isValidMethodToken(b []byte) bool {
+	for _, c := range b {
+		if !tcharTable[c] {
+			return false
 		}
 	}
-
-	return errNotHTTPMethod
+	return true
 }
 
 func SniffHTTP(b []byte, c context.Context) (*SniffHeader, error) {
 	content := session.ContentFromContext(c)
-	ShouldSniffAttr := true
 	// If content.Attributes have information, that means it comes from HTTP inbound PlainHTTP mode.
 	// It will set attributes, so skip it.
-	if content == nil || len(content.Attributes) != 0 {
-		ShouldSniffAttr = false
+	shouldSniffAttr := content != nil && len(content.Attributes) == 0
+
+	method, _, found := bytes.Cut(b, spaceByte)
+	switch {
+	case !found && isValidMethodToken(b):
+		return nil, common.ErrNoClue
+	case !found || !isValidMethodToken(method) || len(method) == 0:
+		return nil, errNotHTTP
 	}
-	if err := beginWithHTTPMethod(b); err != nil {
-		return nil, err
+
+	req, afterReqLine, found := bytes.Cut(b, crlfByte)
+	if !found {
+		return nil, common.ErrNoClue
+	}
+	if len(req) < 12 {
+		return nil, errNotHTTP
+	}
+
+	_, rest, ok1 := bytes.Cut(req, spaceByte)
+	uri, ver, ok2 := bytes.Cut(rest, spaceByte)
+	if !ok1 || !ok2 {
+		return nil, errNotHTTP
+	}
+	if !bytes.HasPrefix(ver, httpVerPrefix) {
+		return nil, errNotHTTP
+	}
+	if len(uri) == 0 {
+		return nil, errNotHTTP
 	}
 
 	sh := &SniffHeader{
 		version: HTTP1,
 	}
 
-	headers := bytes.Split(b, []byte{'\n'})
-	for i := 1; i < len(headers); i++ {
-		header := headers[i]
-		if len(header) == 0 {
-			break
-		}
-		parts := bytes.SplitN(header, []byte{':'}, 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.ToLower(string(parts[0]))
-		value := string(bytes.TrimSpace(parts[1]))
-		if ShouldSniffAttr {
-			content.SetAttribute(key, value) // Put header in attribute
-		}
-		if key == "host" {
-			rawHost := strings.ToLower(value)
-			dest, err := ParseHost(rawHost, net.Port(80))
-			if err != nil {
-				return nil, err
-			}
-			sh.host = dest.Address.String()
-		}
-	}
 	// Parse request line
 	// Request line is like this
 	// "GET /homo/114514 HTTP/1.1"
-	if len(headers) > 0 && ShouldSniffAttr {
-		RequestLineParts := bytes.Split(headers[0], []byte{' '})
-		if len(RequestLineParts) == 3 {
-			content.SetAttribute(":method", string(RequestLineParts[0]))
-			content.SetAttribute(":path", string(RequestLineParts[1]))
+	if shouldSniffAttr {
+		content.SetAttribute(":method", string(method))
+		if uri[0] == '/' {
+			content.SetAttribute(":path", string(uri))
 		}
 	}
 
-	if len(sh.host) > 0 {
-		return sh, nil
+	if uri[0] != '/' && uri[0] != '*' {
+		if _, afterScheme, found := bytes.Cut(uri, schemeSepByte); found {
+			uri = afterScheme
+
+			var path string
+			if i := bytes.IndexAny(uri, "/?#"); i >= 0 {
+				path = string(uri[i:])
+				if path[0] != '/' {
+					path = "/" + path
+				}
+				uri = uri[:i]
+			} else {
+				path = "/"
+			}
+			if shouldSniffAttr {
+				content.SetAttribute(":path", path)
+			}
+
+			if i := bytes.LastIndexByte(uri, '@'); i >= 0 {
+				uri = uri[i+1:]
+			}
+		}
+
+		if host, ok := sniffHost(uri); ok {
+			sh.host = host
+		}
 	}
 
-	return nil, common.ErrNoClue
+	rest = afterReqLine
+	for {
+		line, tail, found := bytes.Cut(rest, crlfByte)
+		if !found {
+			return nil, common.ErrNoClue
+		}
+		if len(line) == 0 {
+			break
+		}
+		rest = tail
+
+		key, value, found := bytes.Cut(line, colonByte)
+		if !found {
+			continue
+		}
+
+		value = bytes.TrimSpace(value)
+		if sh.host == "" && bytes.EqualFold(key, hostKeyByte) {
+			if host, ok := sniffHost(value); ok {
+				sh.host = host
+			}
+		}
+		if shouldSniffAttr {
+			content.SetAttribute(strings.ToLower(string(key)), string(value)) // Put header in attribute
+		}
+	}
+
+	if sh.host == "" {
+		return nil, errNoHostFound
+	}
+	return sh, nil
+}
+
+func sniffHost(raw []byte) (string, bool) {
+	dest, err := ParseHost(string(raw), net.Port(80))
+	if err != nil {
+		return "", false
+	}
+	return dest.Address.String(), true
 }
