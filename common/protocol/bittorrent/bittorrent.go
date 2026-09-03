@@ -2,10 +2,14 @@ package bittorrent
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
+	"strings"
 
 	"github.com/xtls/xray-core/common"
+	"github.com/xtls/xray-core/common/protocol/http"
+	"github.com/xtls/xray-core/common/session"
 )
 
 type SniffHeader struct{}
@@ -122,14 +126,64 @@ func SniffDHT(b []byte) (*SniffHeader, error) {
 	return nil, errNotBittorrent
 }
 
-var lsdPrefix = []byte("BT-SEARCH * HTTP/1.1\r\n")
+var clientsUA = []string{
+	"libtorrent",
+	"libretorrent",
+	"bitcomet",
+	"utorrent",
+	"btwebclient",
+	"azureus",
+	"biglybt",
+	"tixati",
+	"rtorrent",
+	"transmission",
+	"deluge",
+	"qbittorrent",
+}
 
-func SniffLSD(b []byte) (*SniffHeader, error) {
-	if len(b) < len(lsdPrefix) {
+func SniffHTTPtcp(b []byte, ctx context.Context) (*SniffHeader, error) {
+	if _, err := http.SniffHTTP(b, ctx); err != nil && err != http.ErrNoHostFound {
+		return nil, err
+	}
+
+	content := session.ContentFromContext(ctx)
+	if content == nil {
 		return nil, common.ErrNoClue
 	}
 
-	if bytes.HasPrefix(b, lsdPrefix) {
+	ua := strings.ToLower(content.Attributes["user-agent"])
+
+	for _, cua := range clientsUA {
+		if strings.Contains(ua, cua) {
+			return &SniffHeader{}, nil
+		}
+	}
+
+	method := content.Attributes[":method"]
+	path := strings.ToLower(content.Attributes[":path"])
+
+	// HTTP tracker & HTTP Seed
+	if method == "GET" && strings.Contains(path, "info_hash=") {
+		return &SniffHeader{}, nil
+	}
+
+	return nil, errNotBittorrent
+}
+
+func SniffHTTPudp(b []byte, ctx context.Context) (*SniffHeader, error) {
+	if _, err := http.SniffHTTP(b, ctx); err != nil && err != http.ErrNoHostFound {
+		return nil, err
+	}
+
+	content := session.ContentFromContext(ctx)
+	if content == nil {
+		return nil, common.ErrNoClue
+	}
+
+	method := content.Attributes[":method"]
+
+	// LSD
+	if method == "BT-SEARCH" {
 		return &SniffHeader{}, nil
 	}
 

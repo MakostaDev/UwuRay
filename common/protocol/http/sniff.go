@@ -47,7 +47,7 @@ var (
 	httpVerPrefix = []byte("HTTP/1.")
 
 	errNotHTTP     = errors.New("not an HTTP")
-	errNoHostFound = errors.New("no Host header found")
+	ErrNoHostFound = errors.New("no Host header found")
 )
 
 var tcharTable = func() (t [256]bool) {
@@ -179,7 +179,7 @@ func SniffHTTP(b []byte, c context.Context) (*SniffHeader, error) {
 	}
 
 	if sh.host == "" {
-		return nil, errNoHostFound
+		return nil, ErrNoHostFound
 	}
 	return sh, nil
 }
