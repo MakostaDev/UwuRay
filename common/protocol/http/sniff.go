@@ -76,10 +76,7 @@ func isValidMethodToken(b []byte) bool {
 }
 
 func SniffHTTP(b []byte, c context.Context) (*SniffHeader, error) {
-	content := session.ContentFromContext(c)
-	// If content.Attributes have information, that means it comes from HTTP inbound PlainHTTP mode.
-	// It will set attributes, so skip it.
-	shouldSniffAttr := content != nil && len(content.Attributes) == 0
+	attrs := make(map[string]string)
 
 	method, _, found := bytes.Cut(b, spaceByte)
 	switch {
@@ -116,11 +113,9 @@ func SniffHTTP(b []byte, c context.Context) (*SniffHeader, error) {
 	// Parse request line
 	// Request line is like this
 	// "GET /homo/114514 HTTP/1.1"
-	if shouldSniffAttr {
-		content.SetAttribute(":method", string(method))
-		if uri[0] == '/' {
-			content.SetAttribute(":path", string(uri))
-		}
+	attrs[":method"] = string(method)
+	if uri[0] == '/' {
+		attrs[":path"] = string(uri)
 	}
 
 	if uri[0] != '/' && uri[0] != '*' {
@@ -137,9 +132,7 @@ func SniffHTTP(b []byte, c context.Context) (*SniffHeader, error) {
 			} else {
 				path = "/"
 			}
-			if shouldSniffAttr {
-				content.SetAttribute(":path", path)
-			}
+			attrs[":path"] = path
 
 			if i := bytes.LastIndexByte(uri, '@'); i >= 0 {
 				uri = uri[i+1:]
@@ -173,9 +166,14 @@ func SniffHTTP(b []byte, c context.Context) (*SniffHeader, error) {
 				sh.host = host
 			}
 		}
-		if shouldSniffAttr {
-			content.SetAttribute(strings.ToLower(string(key)), string(value)) // Put header in attribute
-		}
+		attrs[strings.ToLower(string(key))] = string(value) // Put header in attribute
+	}
+
+	// If content.Attributes have information, that means it comes from HTTP inbound PlainHTTP mode.
+	// It will set attributes, so skip it.
+	content := session.ContentFromContext(c)
+	if content != nil && len(content.Attributes) == 0 {
+		content.Attributes = attrs
 	}
 
 	if sh.host == "" {
