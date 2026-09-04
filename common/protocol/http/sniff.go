@@ -8,6 +8,7 @@ import (
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/protocol/bittorrent"
 	"github.com/xtls/xray-core/common/session"
 )
 
@@ -46,8 +47,9 @@ var (
 	hostKeyByte   = []byte("host")
 	httpVerPrefix = []byte("HTTP/1.")
 
-	errNotHTTP     = errors.New("not an HTTP")
-	ErrNoHostFound = errors.New("no Host header found")
+	errNotHTTP       = errors.New("not an HTTP")
+	ErrNoHostFound   = errors.New("no Host header found")
+	skipIsBitTorrent = errors.New("is BitTorrent")
 )
 
 var tcharTable = func() (t [256]bool) {
@@ -172,14 +174,27 @@ func SniffHTTP(b []byte, c context.Context) (*SniffHeader, error) {
 	// If content.Attributes have information, that means it comes from HTTP inbound PlainHTTP mode.
 	// It will set attributes, so skip it.
 	content := session.ContentFromContext(c)
-	if content != nil && len(content.Attributes) == 0 {
+	isBitTorrent := false
+	switch {
+	case content != nil && len(content.Attributes) == 0:
 		content.Attributes = attrs
+		fallthrough
+	case content != nil:
+		isBitTorrent = bittorrent.IsHTTP(content.Attributes)
 	}
 
-	if sh.host == "" {
+	switch {
+	case isBitTorrent && sh.host == "":
+		content.SetAttribute(":bittorrent", "no_host")
+		return nil, skipIsBitTorrent
+	case isBitTorrent:
+		content.SetAttribute(":bittorrent", sh.host)
+		return nil, skipIsBitTorrent
+	case sh.host == "":
 		return nil, ErrNoHostFound
+	default:
+		return sh, nil
 	}
-	return sh, nil
 }
 
 func sniffHost(raw []byte) (string, bool) {

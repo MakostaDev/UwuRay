@@ -8,18 +8,19 @@ import (
 	"strings"
 
 	"github.com/xtls/xray-core/common"
-	"github.com/xtls/xray-core/common/protocol/http"
 	"github.com/xtls/xray-core/common/session"
 )
 
-type SniffHeader struct{}
+type SniffHeader struct {
+	host string
+}
 
 func (h *SniffHeader) Protocol() string {
 	return "bittorrent"
 }
 
 func (h *SniffHeader) Domain() string {
-	return ""
+	return h.host
 }
 
 var errNotBittorrent = errors.New("not bittorrent header")
@@ -126,6 +127,24 @@ func SniffDHT(b []byte) (*SniffHeader, error) {
 	return nil, errNotBittorrent
 }
 
+func SniffHTTP(c context.Context) (*SniffHeader, error) {
+	content := session.ContentFromContext(c)
+
+	if content == nil || len(content.Attributes) == 0 {
+		return nil, common.ErrNoClue
+	}
+
+	h, found := content.Attributes[":bittorrent"]
+	if found {
+		if h == "no_host" {
+			return &SniffHeader{}, nil
+		}
+		return &SniffHeader{host: h}, nil
+	}
+
+	return nil, errNotBittorrent
+}
+
 var clientsUA = []string{
 	"libtorrent",
 	"libretorrent",
@@ -141,51 +160,26 @@ var clientsUA = []string{
 	"qbittorrent",
 }
 
-func SniffHTTPtcp(b []byte, ctx context.Context) (*SniffHeader, error) {
-	if _, err := http.SniffHTTP(b, ctx); err != nil && err != http.ErrNoHostFound {
-		return nil, err
-	}
-
-	content := session.ContentFromContext(ctx)
-	if content == nil {
-		return nil, common.ErrNoClue
-	}
-
-	ua := strings.ToLower(content.Attributes["user-agent"])
-
+func IsHTTP(attrs map[string]string) bool {
+	ua := strings.ToLower(attrs["user-agent"])
 	for _, cua := range clientsUA {
 		if strings.Contains(ua, cua) {
-			return &SniffHeader{}, nil
+			return true
 		}
 	}
 
-	method := content.Attributes[":method"]
-	path := strings.ToLower(content.Attributes[":path"])
+	method := attrs[":method"]
+	path := strings.ToLower(attrs[":path"])
 
 	// HTTP tracker & HTTP Seed
 	if method == "GET" && strings.Contains(path, "info_hash=") {
-		return &SniffHeader{}, nil
+		return true
 	}
-
-	return nil, errNotBittorrent
-}
-
-func SniffHTTPudp(b []byte, ctx context.Context) (*SniffHeader, error) {
-	if _, err := http.SniffHTTP(b, ctx); err != nil && err != http.ErrNoHostFound {
-		return nil, err
-	}
-
-	content := session.ContentFromContext(ctx)
-	if content == nil {
-		return nil, common.ErrNoClue
-	}
-
-	method := content.Attributes[":method"]
 
 	// LSD
 	if method == "BT-SEARCH" {
-		return &SniffHeader{}, nil
+		return true
 	}
 
-	return nil, errNotBittorrent
+	return false
 }
