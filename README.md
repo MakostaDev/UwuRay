@@ -4,7 +4,8 @@ UwuRay is a fork of [Xray-core](https://github.com/XTLS/Xray-core) with a few cu
 
 ## Fork features
 
-- Extended BitTorrent sniffer (added detection for UDP Tracker, DHT, and LSD)
+- Extended BitTorrent sniffer
+- Improved HTTP sniffing
 - Switched .dat files from `Loyalsoldier/v2ray-rules-dat` to `MetaCubeX/meta-rules-dat`
 - REALITY min client version check removed
 - Added a workflow to build Linux binaries for releases
