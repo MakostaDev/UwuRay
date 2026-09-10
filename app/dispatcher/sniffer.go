@@ -34,19 +34,25 @@ type Sniffer struct {
 }
 
 func NewSniffer(ctx context.Context) *Sniffer {
+	sniffHTTPWithBT := func(c context.Context, b []byte) (SniffResult, error) {
+		h, err := http.SniffHTTP(b, c)
+		if err == nil {
+			return h, nil
+		}
+		if bh, berr := bittorrent.SniffHTTP(c); berr == nil {
+			return bh, nil
+		}
+		return nil, err
+	}
 	ret := &Sniffer{
 		sniffer: []protocolSnifferWithMetadata{
-			{func(c context.Context, b []byte) (SniffResult, error) { return http.SniffHTTP(b, c) }, false, net.Network_TCP},
-			{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffHTTP(c) }, false, net.Network_TCP},
+			{func(c context.Context, b []byte) (SniffResult, error) { return sniffHTTPWithBT(c, b) }, false, net.Network_TCP},
 			{func(c context.Context, b []byte) (SniffResult, error) { return tls.SniffTLS(b) }, false, net.Network_TCP},
-			{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffBittorrent(b) }, false, net.Network_TCP},
+			{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffBitTorrent(b) }, false, net.Network_TCP},
 
-			{func(c context.Context, b []byte) (SniffResult, error) { return http.SniffHTTP(b, c) }, false, net.Network_UDP},
-			{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffHTTP(c) }, false, net.Network_UDP},
+			{func(c context.Context, b []byte) (SniffResult, error) { return sniffHTTPWithBT(c, b) }, false, net.Network_UDP},
 			{func(c context.Context, b []byte) (SniffResult, error) { return quic.SniffQUIC(b) }, false, net.Network_UDP},
-			{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffUTP(b) }, false, net.Network_UDP},
-			{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffUDPTracker(b) }, false, net.Network_UDP},
-			{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffDHT(b) }, false, net.Network_UDP},
+			{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffUDP(b) }, false, net.Network_UDP},
 		},
 	}
 	if sniffer, err := newFakeDNSSniffer(ctx); err == nil {
@@ -70,7 +76,7 @@ func (s *Sniffer) Sniff(c context.Context, payload []byte, network net.Network) 
 			continue
 		}
 		result, err := protocolSniffer(c, payload)
-		if err == common.ErrNoClue {
+		if err == common.ErrNoClue && network == net.Network_TCP {
 			pendingSniffer = append(pendingSniffer, si)
 			continue
 		} else if err == protocol.ErrProtoNeedMoreData { // Sniffer protocol matched, but need more data to complete sniffing

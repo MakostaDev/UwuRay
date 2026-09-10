@@ -25,23 +25,49 @@ func (h *SniffHeader) Domain() string {
 
 var errNotBittorrent = errors.New("not bittorrent header")
 
-var bittorrentHandshake = []byte("BitTorrent protocol")
+var bittorrentHandshakePrefix = []byte("\x13BitTorrent protocol")
 
-func SniffBittorrent(b []byte) (*SniffHeader, error) {
+func SniffBitTorrent(b []byte) (*SniffHeader, error) {
 	if len(b) < 20 {
-		return nil, common.ErrNoClue
+		if bytes.HasPrefix(bittorrentHandshakePrefix, b) {
+			return nil, common.ErrNoClue
+		}
+		return nil, errNotBittorrent
 	}
 
-	if b[0] == 19 && bytes.HasPrefix(b[1:], bittorrentHandshake) {
+	if bytes.HasPrefix(b, bittorrentHandshakePrefix) {
 		return &SniffHeader{}, nil
 	}
 
 	return nil, errNotBittorrent
 }
 
-func SniffUTP(b []byte) (*SniffHeader, error) {
-	if len(b) < 20 {
+func SniffUDP(b []byte) (*SniffHeader, error) {
+	if len(b) == 0 {
 		return nil, common.ErrNoClue
+	}
+
+	sh, err := sniffUTP(b)
+	if err == nil {
+		return sh, nil
+	}
+
+	sh, err = sniffUDPTracker(b)
+	if err == nil {
+		return sh, nil
+	}
+
+	sh, err = sniffDHT(b)
+	if err == nil {
+		return sh, nil
+	}
+
+	return nil, errNotBittorrent
+}
+
+func sniffUTP(b []byte) (*SniffHeader, error) {
+	if len(b) < 20 {
+		return nil, errNotBittorrent
 	}
 
 	// type 4 (ST_SYN), version 1
@@ -88,9 +114,9 @@ func SniffUTP(b []byte) (*SniffHeader, error) {
 	return &SniffHeader{}, nil
 }
 
-func SniffUDPTracker(b []byte) (*SniffHeader, error) {
+func sniffUDPTracker(b []byte) (*SniffHeader, error) {
 	if len(b) < 16 {
-		return nil, common.ErrNoClue
+		return nil, errNotBittorrent
 	}
 
 	// protocol_id
@@ -113,9 +139,9 @@ var dhtPrefixes = [][]byte{
 	[]byte("d1:el"), // error
 }
 
-func SniffDHT(b []byte) (*SniffHeader, error) {
+func sniffDHT(b []byte) (*SniffHeader, error) {
 	if len(b) < 5 {
-		return nil, common.ErrNoClue
+		return nil, errNotBittorrent
 	}
 
 	for _, p := range dhtPrefixes {

@@ -3,8 +3,6 @@ package bittorrent
 import (
 	"encoding/binary"
 	"testing"
-
-	"github.com/xtls/xray-core/common"
 )
 
 // utpPacket builds the fixed 20-byte header defined by BEP 29.
@@ -50,12 +48,12 @@ func TestSniffUTP(t *testing.T) {
 		{"unknown extension", utpPacket(4, 2, 0), errNotBittorrent},
 		{"extension chain past the datagram", utpPacket(4, 1, 0, 0, 8, 0xff), errNotBittorrent},
 		{"selective ack not in multiples of 4", append(utpPacket(4, 1, 0), 0, 3, 0xff, 0x00, 0xff), errNotBittorrent},
-		{"shorter than the header", utpPacket(4, 0, 0)[:19], common.ErrNoClue},
+		{"shorter than the header", utpPacket(4, 0, 0)[:19], errNotBittorrent},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h, err := SniffUTP(c.payload)
+			h, err := sniffUTP(c.payload)
 			if err != c.err {
 				t.Fatalf("expected error %v, got %v", c.err, err)
 			}
